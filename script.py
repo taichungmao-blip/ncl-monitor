@@ -14,7 +14,7 @@ TARGET_URL = "https://www.ncl.com/vacations?cruise-destination=asia&sortBy=price
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK")
 
 # [關鍵設定] 通知門檻：低於此價格才通知 (美金)
-NOTIFY_THRESHOLD = 1000 
+NOTIFY_THRESHOLD = 1500 
 
 def setup_driver():
     options = Options()

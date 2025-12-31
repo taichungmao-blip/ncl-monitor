@@ -1,37 +1,43 @@
-name: NCL Asia Price Sniper
+name: Check NCL Cruise Price
 
 on:
-  # 1. 排程執行
   schedule:
-    # 每天日本時間 12:00 執行
-    # GitHub 使用 UTC 時間，JST 是 UTC+9
-    # 所以 UTC 03:00 = JST 12:00
-    - cron: '0 3 * * *'
-  
-  # 2. 允許手動點擊按鈕觸發 (方便測試)
+    # UTC 02:00 = 台灣時間 10:00
+    - cron: '0 2 * * *'
   workflow_dispatch:
 
+# 必須給予寫入權限才能 Commit
+permissions:
+  contents: write
+
 jobs:
-  run-crawler:
+  check-price:
     runs-on: ubuntu-latest
 
     steps:
-    # 下載您的程式碼
-    - name: Checkout code
-      uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v3
 
-    # 設定 Python 環境
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.9'
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
 
-    # 安裝依賴套件
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
 
-    # 執行爬蟲腳本 (假設您的腳本檔名是 script.py)
-    - name: Run NCL Crawler
-      run: python script.py
+      - name: Run NCL Scraper
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: python main.py
+      
+      # 如果 main.py 更新了 last_seen.txt，這個步驟會把它存回 GitHub
+      - name: Commit and push if changed
+        run: |
+          git config --global user.name 'GitHub Action'
+          git config --global user.email 'action@github.com'
+          git add last_seen.txt
+          # 如果沒有變更 (diff-index --quiet) 就不執行 commit，避免報錯
+          git diff-index --quiet HEAD || git commit -m "Update last seen cruise"
+          git push

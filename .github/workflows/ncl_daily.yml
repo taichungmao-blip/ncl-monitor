@@ -1,43 +1,20 @@
-name: Check NCL Cruise Price
-
-on:
-  schedule:
-    # UTC 02:00 = 台灣時間 10:00
-    - cron: '0 2 * * *'
-  workflow_dispatch:
-
-# 必須給予寫入權限才能 Commit
-permissions:
-  contents: write
-
-jobs:
-  check-price:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
-
-      - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
-
-      - name: Run NCL Scraper
-        env:
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-        run: python main.py
-      
-      # 如果 main.py 更新了 last_seen.txt，這個步驟會把它存回 GitHub
-      - name: Commit and push if changed
+- name: Commit and push if changed
         run: |
           git config --global user.name 'GitHub Action'
           git config --global user.email 'action@github.com'
-          git add last_seen.txt
-          # 如果沒有變更 (diff-index --quiet) 就不執行 commit，避免報錯
-          git diff-index --quiet HEAD || git commit -m "Update last seen cruise"
-          git push
+          
+          # 檢查 last_seen.txt 是否存在
+          if [ -f "last_seen.txt" ]; then
+            git add last_seen.txt
+            
+            # 檢查是否有變動 (如果有變動才 Commit)
+            if ! git diff-index --quiet HEAD; then
+              git commit -m "Update last seen cruise"
+              git push
+              echo "已更新 last_seen.txt 並推送到 GitHub"
+            else
+              echo "last_seen.txt 內容沒有變動，跳過 Commit"
+            fi
+          else
+            echo "尚未生成 last_seen.txt (可能未發現符合條件的行程)，跳過存檔步驟"
+          fi

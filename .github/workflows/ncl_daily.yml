@@ -1,20 +1,54 @@
-- name: Commit and push if changed
+name: Check NCL Cruise Price
+
+on:
+  schedule:
+    # 每天 UTC 時間 02:00 執行 (等於台灣時間早上 10:00)
+    - cron: '0 2 * * *'
+  workflow_dispatch: # 允許手動點擊按鈕觸發
+
+# 給予 Actions 寫入權限，以便將更新後的 last_seen.txt 推送回儲存庫
+permissions:
+  contents: write
+
+jobs:
+  check-price:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Run NCL Scraper
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: python main.py
+
+      - name: Commit and push if changed
         run: |
           git config --global user.name 'GitHub Action'
           git config --global user.email 'action@github.com'
           
-          # 檢查 last_seen.txt 是否存在
+          # 1. 檢查 last_seen.txt 是否存在 (避免程式沒跑出結果時報錯)
           if [ -f "last_seen.txt" ]; then
             git add last_seen.txt
             
-            # 檢查是否有變動 (如果有變動才 Commit)
+            # 2. 檢查檔案內容是否有變更 (避免產生空的 Commit)
             if ! git diff-index --quiet HEAD; then
               git commit -m "Update last seen cruise"
               git push
-              echo "已更新 last_seen.txt 並推送到 GitHub"
+              echo "✅ 已成功更新 last_seen.txt 並推送到 GitHub"
             else
-              echo "last_seen.txt 內容沒有變動，跳過 Commit"
+              echo "ℹ️ last_seen.txt 內容沒有變動，跳過 Commit"
             fi
           else
-            echo "尚未生成 last_seen.txt (可能未發現符合條件的行程)，跳過存檔步驟"
+            echo "⚠️ 尚未生成 last_seen.txt (可能未發現符合條件的行程)，跳過存檔步驟"
           fi

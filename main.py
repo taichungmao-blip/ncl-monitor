@@ -13,17 +13,23 @@ URL = "https://www.ncl.com/in/en/vacations?cruise-port=hkg,inc,kee,sin,tok,yok&s
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 LAST_SEEN_FILE = "last_seen.txt"
 
-def send_discord_notification(title, price, link):
+def send_discord_notification(title, price_str, link, old_price=None):
     if not DISCORD_WEBHOOK_URL:
         print("⚠️ 未設定 Discord Webhook")
         return
+    
+    # 建立通知訊息
+    desc = f"目前價格: **{price_str}** (低於 $1000 USD)"
+    if old_price and old_price > 0:
+        desc += f"\n(上次價格: ${old_price})"
+
     data = {
-        "content": "🚢 **發現新的 NCL 亞洲特價郵輪！**",
+        "content": "🚢 **NCL 郵輪價格/行程變動通知！**",
         "embeds": [{
             "title": title,
-            "description": f"價格: **{price}** (低於 $1000 USD)",
+            "description": desc,
             "url": link,
-            "color": 5814783
+            "color": 5814783 # 藍色
         }]
     }
     try:
@@ -33,18 +39,33 @@ def send_discord_notification(title, price, link):
         print(f"❌ Discord 通知發送失敗: {e}")
 
 def get_last_seen():
+    """讀取上次的標題與價格，回傳 (title, price_int)"""
     if os.path.exists(LAST_SEEN_FILE):
         with open(LAST_SEEN_FILE, "r", encoding="utf-8") as f:
-            return f.read().strip()
-    return ""
+            content = f.read().strip()
+            # 嘗試解析 "標題|價格" 格式
+            if "|" in content:
+                parts = content.split("|")
+                # 取出標題和價格 (最後一個部分視為價格)
+                title_part = "|".join(parts[:-1]) 
+                try:
+                    price_part = int(parts[-1])
+                except:
+                    price_part = 0
+                return title_part, price_part
+            else:
+                # 兼容舊格式 (檔案裡只有標題)
+                return content, 0
+    return "", 0
 
-def save_last_seen(title):
+def save_last_seen(title, price_int):
+    """儲存格式：標題|價格整數"""
     with open(LAST_SEEN_FILE, "w", encoding="utf-8") as f:
-        f.write(title)
+        f.write(f"{title}|{price_int}")
 
 def check_cruise():
     chrome_options = Options()
-    chrome_options.add_argument("--headless=new") 
+    chrome_options.add_argument("--headless=new")
     chrome_options.add_argument("--window-size=1920,1080")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
@@ -61,53 +82,41 @@ def check_cruise():
         driver.execute_script("window.scrollTo(0, 500);")
         time.sleep(5) 
 
-        # 保存 HTML 以便除錯
-        with open("debug_page.html", "w", encoding="utf-8") as f:
-            f.write(driver.page_source)
-
         # --- 1. 抓取標題 ---
         title = "未知行程"
         try:
-            # 尋找行程標題 (優先找包含 'Day' 的連結)
             titles = driver.find_elements(By.XPATH, "//a[contains(@class, 'link') and contains(text(), 'Day')]")
             valid_titles = [t for t in titles if len(t.text) > 10]
-            
             if valid_titles:
                 title = valid_titles[0].text.strip()
             else:
-                # 備用方案：找 h3
                 title_element = driver.find_element(By.CSS_SELECTOR, "h3")
                 title = title_element.text.strip()
         except Exception:
             print("⚠️ 找不到標題元素")
 
-        # --- 2. 抓取價格 (重點修正部分) ---
+        # --- 2. 抓取價格 (已過濾稅金) ---
         price_elements = driver.find_elements(By.XPATH, "//span[contains(text(), '$')]")
-        
         lowest_price = 99999
         price_str = ""
         found_price = False
 
-        print(f"🔎 掃描到 {len(price_elements)} 個價格標籤，開始過濾...")
+        print(f"🔎 掃描到 {len(price_elements)} 個價格標籤...")
 
         for p in price_elements:
             raw_text = p.text.strip()
             text_lower = raw_text.lower()
             
-            # --- 過濾邏輯 ---
-            # 如果文字中包含 'tax', 'fee', 'expense' (稅費) 就跳過
+            # 過濾稅金關鍵字
             if "tax" in text_lower or "fee" in text_lower or "port" in text_lower or "expense" in text_lower:
                 continue
 
-            # 確保格式像 $799
             if '$' in raw_text:
                 try:
-                    # 提取數字
                     num_list = re.findall(r'\d+', raw_text.replace(',', ''))
                     if num_list:
                         val = int(num_list[0])
-                        # 設定合理價格區間 (大於 100 且小於目前的最低價)
-                        # 這邊特別把 lowest_price 的判斷加進來，只抓取"最小的船票價格"
+                        # 只取大於100且目前最小的價格
                         if 100 < val < lowest_price:
                             lowest_price = val
                             price_str = raw_text
@@ -119,17 +128,21 @@ def check_cruise():
 
         print(f"📊 分析結果 -> 標題: [{title}] | 最低船票價格: [{price_str}] (${lowest_price})")
 
+        # --- 判斷邏輯更新 ---
         if found_price and lowest_price < 1000:
-            last_seen_title = get_last_seen()
+            last_title, last_price = get_last_seen()
             
-            # 為了避免因為標題相同但價格變動而漏發，或是單純只看標題
-            # 這裡維持「標題不同才通知」的邏輯。如果你希望「標題相同但價格變便宜」也通知，可以修改這裡。
-            if title != last_seen_title:
-                print("🎉 條件符合！準備發送通知...")
-                send_discord_notification(title, price_str, link)
-                save_last_seen(title)
+            # 觸發條件：(標題不同) 或 (價格不同)
+            if title != last_title or lowest_price != last_price:
+                print(f"🎉 發現變化！(舊: {last_title} ${last_price} -> 新: {title} ${lowest_price})")
+                
+                # 發送通知，並傳入舊價格方便比較
+                send_discord_notification(title, price_str, link, old_price=last_price)
+                
+                # 更新紀錄
+                save_last_seen(title, lowest_price)
             else:
-                print("💤 此行程上次已通知過")
+                print(f"💤 行程相同且價格未變 ({lowest_price})，跳過通知")
         else:
             print(f"❌ 未發送通知 (價格: ${lowest_price} >= 1000 或未找到)")
 

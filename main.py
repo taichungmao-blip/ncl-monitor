@@ -5,28 +5,29 @@ import requests
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 
 # 設定目標網址
 URL = "https://www.ncl.com/in/en/vacations?cruise-port=hkg,inc,kee,sin,tok,yok&sort=price_low_high"
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 LAST_SEEN_FILE = "last_seen.txt"
 
-def send_discord_notification(title, price_str, link, old_price=None):
+def send_discord_notification(main_dest, cruise_info, departure, price_str, link, old_price=None):
     if not DISCORD_WEBHOOK_URL:
         print("⚠️ 未設定 Discord Webhook")
         return
     
-    # 建立通知訊息
-    desc = f"目前價格: **{price_str}** (低於 $1000 USD)"
+    # 建立通知訊息，增加行程資訊排版
+    desc = f"**🚢 行程資訊:** {cruise_info}\n"
+    desc += f"**📍 出發地點:** {departure}\n"
+    desc += f"**💰 目前價格: {price_str}** (低於 $1000 USD)"
+    
     if old_price and old_price > 0:
-        desc += f"\n(上次價格: ${old_price})"
+        desc += f"\n📉 (上次價格: ${old_price})"
 
     data = {
         "content": "🚢 **NCL 郵輪價格/行程變動通知！**",
         "embeds": [{
-            "title": title,
+            "title": main_dest, # 顯示主要目的地 (例如: Southern Africa...)
             "description": desc,
             "url": link,
             "color": 5814783 # 藍色
@@ -43,10 +44,8 @@ def get_last_seen():
     if os.path.exists(LAST_SEEN_FILE):
         with open(LAST_SEEN_FILE, "r", encoding="utf-8") as f:
             content = f.read().strip()
-            # 嘗試解析 "標題|價格" 格式
             if "|" in content:
                 parts = content.split("|")
-                # 取出標題和價格 (最後一個部分視為價格)
                 title_part = "|".join(parts[:-1]) 
                 try:
                     price_part = int(parts[-1])
@@ -54,7 +53,6 @@ def get_last_seen():
                     price_part = 0
                 return title_part, price_part
             else:
-                # 兼容舊格式 (檔案裡只有標題)
                 return content, 0
     return "", 0
 
@@ -82,18 +80,25 @@ def check_cruise():
         driver.execute_script("window.scrollTo(0, 500);")
         time.sleep(5) 
 
-        # --- 1. 抓取標題 ---
-        title = "未知行程"
+        # --- 1. 抓取行程詳細資訊 (根據提供的 HTML 結構) ---
+        main_dest = "未知目的地"
+        cruise_info = "未知天數與船名"
+        departure = "未知出發地"
+
         try:
-            titles = driver.find_elements(By.XPATH, "//a[contains(@class, 'link') and contains(text(), 'Day')]")
-            valid_titles = [t for t in titles if len(t.text) > 10]
-            if valid_titles:
-                title = valid_titles[0].text.strip()
-            else:
-                title_element = driver.find_element(By.CSS_SELECTOR, "h3")
-                title = title_element.text.strip()
-        except Exception:
-            print("⚠️ 找不到標題元素")
+            # 抓取主要目的地 (e.g., Southern Africa: Maldives...)
+            main_dest = driver.find_element(By.CSS_SELECTOR, ".c66_title h2").text.strip()
+            # 抓取天數與船名 (e.g., 16-day Cruise on Norwegian Sun)
+            cruise_info = driver.find_element(By.CSS_SELECTOR, ".c66_label h2").text.strip()
+            # 抓取出發地 (e.g., from Singapore, Singapore)
+            departure = driver.find_element(By.CSS_SELECTOR, ".c66_subtitle h3").text.strip()
+        except Exception as e:
+            print(f"⚠️ 找不到部分標題元素: {e}")
+            # 保留基本的 Fallback
+            try:
+                main_dest = driver.find_element(By.CSS_SELECTOR, "h3").text.strip()
+            except:
+                pass
 
         # --- 2. 抓取價格 (已過濾稅金) ---
         price_elements = driver.find_elements(By.XPATH, "//span[contains(text(), '$')]")
@@ -107,7 +112,6 @@ def check_cruise():
             raw_text = p.text.strip()
             text_lower = raw_text.lower()
             
-            # 過濾稅金關鍵字
             if "tax" in text_lower or "fee" in text_lower or "port" in text_lower or "expense" in text_lower:
                 continue
 
@@ -116,7 +120,6 @@ def check_cruise():
                     num_list = re.findall(r'\d+', raw_text.replace(',', ''))
                     if num_list:
                         val = int(num_list[0])
-                        # 只取大於100且目前最小的價格
                         if 100 < val < lowest_price:
                             lowest_price = val
                             price_str = raw_text
@@ -126,21 +129,21 @@ def check_cruise():
         
         link = driver.current_url
 
-        print(f"📊 分析結果 -> 標題: [{title}] | 最低船票價格: [{price_str}] (${lowest_price})")
+        # 將主要目的地與船名組合作為紀錄的唯一標識
+        title_for_record = f"{main_dest} | {cruise_info}"
+        print(f"📊 分析結果 -> 行程: [{title_for_record}] | 最低船票價格: [{price_str}] (${lowest_price})")
 
         # --- 判斷邏輯更新 ---
         if found_price and lowest_price < 1000:
             last_title, last_price = get_last_seen()
             
-            # 觸發條件：(標題不同) 或 (價格不同)
-            if title != last_title or lowest_price != last_price:
-                print(f"🎉 發現變化！(舊: {last_title} ${last_price} -> 新: {title} ${lowest_price})")
+            if title_for_record != last_title or lowest_price != last_price:
+                print(f"🎉 發現變化！(舊: ${last_price} -> 新: ${lowest_price})")
                 
-                # 發送通知，並傳入舊價格方便比較
-                send_discord_notification(title, price_str, link, old_price=last_price)
+                # 發送通知，傳入所有新抓取的資訊
+                send_discord_notification(main_dest, cruise_info, departure, price_str, link, old_price=last_price)
                 
-                # 更新紀錄
-                save_last_seen(title, lowest_price)
+                save_last_seen(title_for_record, lowest_price)
             else:
                 print(f"💤 行程相同且價格未變 ({lowest_price})，跳過通知")
         else:
